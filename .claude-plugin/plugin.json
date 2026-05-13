@@ -1,0 +1,8 @@
+{
+  "name": "get-forked",
+  "version": "0.1.0",
+  "description": "Fork Claude Code sessions into named tmux sessions, creating parallel workstreams from a shared conversation checkpoint.",
+  "author": "lavabyrd",
+  "homepage": "https://github.com/lavabyrd/get-forked",
+  "license": "MIT"
+}
