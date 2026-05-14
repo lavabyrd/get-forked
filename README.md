@@ -58,23 +58,93 @@ To uninstall: `./uninstall.sh`.
 
 Names are required so you can find the fork again in `tmux ls` and `/fork-queue`.
 
-## Example
+## Examples
+
+### Chase a tangent, then come back
+
+You're deep in a refactor and notice a flaky test. Fork off to investigate without losing context.
 
 ```text
-You    > /fork-this try-rust-rewrite
-Claude > Forked to try-rust-rewrite — switched to new tmux session.
+You    > /fork-this debug-flaky-test
+Claude > Forked to debug-flaky-test — switched to new tmux session.
 
-# ... work in the fork ...
+# ... in the fork, dig into the test, fix it, commit ...
 
 You    > /fork-off
-Claude > (back in parent tmux session)
+# back in the parent session with the refactor still in progress
 ```
 
+### Spawn parallel background work
+
+Kick off PR triage in a detached fork while you keep coding.
+
+```text
+You    > /fork-that triage-renovate-prs
+Claude > Forked to triage-renovate-prs — running detached. You remain here.
+
+You    > /fork-queue
+Claude >
+        main ◀ current
+        └── triage-renovate-prs
+
+# attach to it later:
+$ tmux attach -t triage-renovate-prs
+```
+
+### A/B two implementations from the same starting point
+
+```text
+You    > /fork-that try-rust
+You    > /fork-that try-go
+You    > /fork-queue
+Claude >
+        main ◀ current
+        ├── try-rust
+        └── try-go
+```
+
+Both forks resume from the same conversation checkpoint and diverge from there. Compare diffs at the end.
+
 ## How it works
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Parent as Parent (tmux: main)
+    participant Script as fork-this.sh
+    participant State as ~/.claude/forks.json
+    participant Child as Child (tmux: new-name)
+
+    User->>Parent: /fork-this new-name
+    Parent->>Script: bash fork-this.sh new-name
+    Script->>Script: parent_id = newest *.jsonl in cwd project dir
+    Script->>Script: new_id = uuidgen
+    Script->>State: record {new_id → parent_id} relationship
+    Script->>Child: tmux new-session "claude --resume parent_id --fork-session --session-id new_id"
+    Script->>Parent: tmux switch-client -t new-name
+    Note over Child: Child resumes parent's full transcript,<br/>then diverges from here on.
+```
+
+In words:
 
 1. The current session's UUID is the most recent `*.jsonl` under `~/.claude/projects/<cwd-hash>/`.
 2. The script generates a new UUID for the child, records the parent → child relationship in `~/.claude/forks.json`, and spawns `claude --resume <parent> --fork-session --session-id <new>` inside a new tmux session named after the fork.
 3. Because the new process resumes the parent's transcript with `--fork-session`, the child sees the full conversation history at the point of branching, then diverges.
+
+### Which command does what
+
+```mermaid
+flowchart LR
+    A[I want to...] --> B{follow the<br/>tangent now?}
+    B -- yes --> C[/fork-this/]
+    B -- no, do it in parallel --> D[/fork-that/]
+    A --> E{done in<br/>this fork?}
+    E -- yes --> F[/fork-off/]
+    A --> G{what's<br/>running?}
+    G --> H[/fork-queue/]
+    A --> I{something<br/>broken?}
+    I --> J[/forking-hell/]
+```
 
 ## State file
 
