@@ -7,16 +7,32 @@ description: Use when the user wants to fork, branch, or split a Claude Code ses
 
 ## Overview
 
-Fork the current Claude Code session into a named tmux session, creating parallel workstreams from a shared conversation checkpoint.
+Fork the current Claude Code session into a named tmux context, creating parallel workstreams from a shared conversation checkpoint.
 
 ## Commands
 
 | Command | What happens |
 |---------|-------------|
 | `/fork-this [name]` | Fork current session, switch to fork (you become branch B) |
-| `/fork-that [name]` | Fork current session, stay here (fork parked in background tmux window) |
+| `/fork-that [name]` | Fork current session, stay here (fork parked in background) |
 | `/fork-off` | Close this fork, return to parent (refuses if children exist) |
-| `/fork-queue` | Print the fork tree with names and session IDs |
+| `/fork-queue` | Print the fork tree with names, modes, and session IDs |
+
+## Configuration
+
+Fork mode is set once at install time in `~/.claude/get-forked.conf`:
+
+```bash
+FORK_MODE=session   # or: window, pane
+```
+
+To change it, edit that file directly. The mode takes effect immediately on the next fork.
+
+| Mode | Opens forks as | Navigate back via |
+|------|---------------|-------------------|
+| `session` | New tmux session | `tmux switch-client` |
+| `window` | New window in current session | `tmux select-window` |
+| `pane` | Horizontal split in current window | `tmux select-pane` |
 
 ## State File
 
@@ -30,11 +46,15 @@ Fork the current Claude Code session into a named tmux session, creating paralle
       "parent": "<parent-uuid>",
       "children": [],
       "created_at": "2026-05-01T00:00:00Z",
-      "cwd": "/path/to/working/dir"
+      "cwd": "/path/to/working/dir",
+      "mode": "session",
+      "pane_id": null
     }
   }
 }
 ```
+
+`mode` records how the fork was opened so `/fork-off` can close it correctly regardless of what `FORK_MODE` is set to today. `pane_id` is populated only for pane-mode forks.
 
 ## Get Current Session ID
 
@@ -47,58 +67,60 @@ session_id=$(ls -t ~/.claude/projects/${project_hash}/*.jsonl | head -1 | xargs 
 
 ### /fork-this [name] and /fork-that [name]
 
+Both scripts read `~/.claude/get-forked.conf` for `FORK_MODE`, then branch:
+
+**session mode:**
 ```bash
-parent_id=$(ls -t ~/.claude/projects/$(pwd | sed 's|/|-|g')/*.jsonl | head -1 | xargs basename -s .jsonl)
-new_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
-name="${1:-fork-$(date +%s)}"
-
-# Update state file
-jq --arg id "$new_id" --arg name "$name" --arg parent "$parent_id" \
-   --arg cwd "$(pwd)" --arg ts "$(date -u +%FT%TZ)" \
-   '.sessions[$id] = {name: $name, parent: $parent, children: [], created_at: $ts, cwd: $cwd} |
-    .sessions[$parent].children += [$id]' \
-   ~/.claude/forks.json > /tmp/forks.tmp && mv /tmp/forks.tmp ~/.claude/forks.json
-
-# Spawn fork in new tmux window
-tmux new-window -n "$name" \
-  "claude --resume $parent_id --fork-session --session-id $new_id --name $name"
-
-# /fork-this only: switch to the new window
-tmux select-window -t "$name"   # omit this line for /fork-that
+tmux new-session -d -s "$name" -c "$(pwd)" "claude --resume $parent_id --fork-session --session-id $new_id --name $name"
+tmux switch-client -t "$name"          # /fork-this only; omit for /fork-that
 ```
 
-**If `~/.claude/forks.json` does not exist**, initialise it first:
+**window mode:**
 ```bash
-echo '{"sessions":{}}' > ~/.claude/forks.json
+tmux new-window -n "$name" -c "$(pwd)" "claude --resume $parent_id ..."   # /fork-this (auto-focuses)
+tmux new-window -d -n "$name" -c "$(pwd)" "claude --resume $parent_id ..." # /fork-that (-d = don't switch)
 ```
+
+**pane mode** (horizontal split):
+```bash
+# /fork-this — split and stay in new pane (default tmux behaviour)
+pane_id=$(tmux split-window -h -c "$(pwd)" -P -F '#{pane_id}' "claude --resume $parent_id ...")
+
+# /fork-that — split but keep focus on current pane
+pane_id=$(tmux split-window -h -d -c "$(pwd)" -P -F '#{pane_id}' "claude --resume $parent_id ...")
+```
+
+State is always updated with the fork's `mode` and, for pane mode, the new `pane_id`. The parent entry also records its own `pane_id` when first seen in pane mode.
 
 ### /fork-off
 
-```bash
-session_id=$(ls -t ~/.claude/projects/$(pwd | sed 's|/|-|g')/*.jsonl | head -1 | xargs basename -s .jsonl)
-parent_name=$(jq -r --arg id "$session_id" '.sessions[.sessions[$id].parent].name // empty' ~/.claude/forks.json)
+Reads `mode` from the current session's state entry, then closes accordingly:
 
-if [ -z "$parent_name" ]; then
-  echo "No parent session recorded for this fork."
-else
-  tmux select-window -t "$parent_name"
-fi
+```bash
+case "$fork_mode" in
+  session)
+    tmux switch-client -t "$parent_name"
+    tmux kill-session -t "$current_session"
+    ;;
+  window)
+    tmux select-window -t ":$parent_name"
+    tmux kill-window -t ":$current_window"
+    ;;
+  pane)
+    [ -n "$parent_pane_id" ] && tmux select-pane -t "$parent_pane_id"
+    tmux kill-pane -t "$current_pane_id"
+    ;;
+esac
 ```
 
 ### /fork-queue
 
-```bash
-jq -r '
-  . as $doc |
-  def indent(n): " " * n;
-  def render(id; depth):
-    indent(depth * 2) + ($doc.sessions[id].name // id) + " (" + id + ")" ,
-    ($doc.sessions[id].children[] as $child | render($child; depth + 1));
-  [$doc.sessions | to_entries[]
-    | select(.value.parent == null or (.value.parent as $p | $doc.sessions[$p] == null))
-    | .key
-  ] | .[] | render(.; 0)
-' ~/.claude/forks.json
+Shows the full tree with mode tags:
+
+```
+main [session] (abc123) ◀ current
+  debug-flaky [window] (def456)
+  try-rust [pane] (ghi789)
 ```
 
 ## When to Use Which Command
@@ -112,14 +134,15 @@ jq -r '
 
 ## NEVER
 
-- NEVER fork without a name when running more than one fork — auto-names like `fork-1746123456` are indistinguishable in `/fork-queue` and tmux
-- NEVER fork-this when the parent session has pending tool calls in flight — the fork captures mid-execution state and the child resumes in a confused context
+- NEVER fork without a name when running more than one fork — auto-names like `fork-1746123456` are indistinguishable in `/fork-queue`
+- NEVER fork while the parent session has pending tool calls in flight — the fork captures mid-execution state and the child resumes in a confused context
 - NEVER let two forked sessions write to the same files simultaneously — forks share no awareness of each other and will silently overwrite each other's work
-- NEVER assume `/fork-off` closes the fork — it only switches your focus; the fork window stays alive in tmux
+- NEVER assume `/fork-off` closes the fork — it only switches your focus; in session mode the window stays alive in tmux until killed
 
 ## Common Mistakes
 
-- **State file missing**: initialise with `echo '{"sessions":{}}' > ~/.claude/forks.json` before first fork
+- **Config file missing**: defaults to session mode; re-run `install.sh` to write `~/.claude/get-forked.conf`
+- **State file missing**: initialise with `echo '{"sessions":{}}' > ~/.claude/forks.json`
 - **tmux not running**: all commands require an active tmux session; check with `tmux ls`
-- **Name collision**: if a tmux window named `$name` already exists, `new-window` will suffix it — use a unique name
+- **Name collision**: if a tmux session/window named `$name` already exists, use a unique name
 - **jq not installed**: required for state management; install via `brew install jq`

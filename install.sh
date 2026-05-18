@@ -24,10 +24,30 @@ cp "$REPO_DIR/skills/get-forked/SKILL.md" "$CLAUDE_DIR/skills/get-forked/"
 
 [ -f "$CLAUDE_DIR/forks.json" ] || echo '{"sessions":{}}' > "$CLAUDE_DIR/forks.json"
 
+echo ""
+echo "How should forks open?"
+echo "  session  — new tmux session per fork (most isolated, default)"
+echo "  window   — new tmux window in the current session"
+echo "  pane     — horizontal split in the current window"
+printf "Mode [session]: "
+read -r mode_choice
+mode_choice="${mode_choice:-session}"
+case "$mode_choice" in
+  session|window|pane) ;;
+  *)
+    echo "Unknown mode '$mode_choice', defaulting to 'session'"
+    mode_choice=session
+    ;;
+esac
+echo "FORK_MODE=$mode_choice" > "$CLAUDE_DIR/get-forked.conf"
+
+echo ""
 echo "Installed:"
 echo "  scripts  -> $CLAUDE_DIR/scripts/fork-{this,that,off,queue,doctor}.sh"
 echo "  commands -> $CLAUDE_DIR/commands/fork-{this,that,off,queue}.md, forking-hell.md"
 echo "  skill    -> $CLAUDE_DIR/skills/get-forked/SKILL.md"
+echo "  config   -> $CLAUDE_DIR/get-forked.conf (FORK_MODE=$mode_choice)"
 echo "  state    -> $CLAUDE_DIR/forks.json"
 echo ""
+echo "To change mode later, edit $CLAUDE_DIR/get-forked.conf"
 echo "Run /forking-hell in a new Claude Code session to verify."

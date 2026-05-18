@@ -18,10 +18,15 @@ if [ -z "$session_id" ]; then
 fi
 
 parent_id=$(jq -r --arg id "$session_id" '.sessions[$id].parent // empty' ~/.claude/forks.json)
-parent_name=$(jq -r --arg id "$session_id" \
-  'if .sessions[$id].parent then .sessions[.sessions[$id].parent].name else empty end' \
-  ~/.claude/forks.json)
-current_session=$(tmux display-message -p '#S')
+fork_mode=$(jq -r --arg id "$session_id" '.sessions[$id].mode // "session"' ~/.claude/forks.json)
+
+if [ -z "$parent_id" ]; then
+  echo "This session has no recorded parent — it may be the root. Not closing."
+  exit 1
+fi
+
+parent_name=$(jq -r --arg id "$parent_id" '.sessions[$id].name // empty' ~/.claude/forks.json)
+parent_pane=$(jq -r --arg id "$parent_id" '.sessions[$id].pane_id // empty' ~/.claude/forks.json)
 
 if [ -z "$parent_name" ]; then
   echo "This session has no recorded parent — it may be the root. Not closing."
@@ -48,12 +53,22 @@ if [ "$force" = true ] && [ "$children" -gt 0 ]; then
   descendants=$(collect_descendants "$session_id" | tail -n +2)
   for desc_id in $descendants; do
     desc_name=$(jq -r --arg id "$desc_id" '.sessions[$id].name // empty' ~/.claude/forks.json)
-    tmux kill-session -t "$desc_name" 2>/dev/null && echo "Killed fork: $desc_name"
+    desc_mode=$(jq -r --arg id "$desc_id" '.sessions[$id].mode // "session"' ~/.claude/forks.json)
+    desc_pane=$(jq -r --arg id "$desc_id" '.sessions[$id].pane_id // empty' ~/.claude/forks.json)
+    case "$desc_mode" in
+      session) tmux kill-session -t "$desc_name" 2>/dev/null && echo "Killed fork: $desc_name" ;;
+      window)  tmux kill-window -t ":$desc_name" 2>/dev/null && echo "Killed fork: $desc_name" ;;
+      pane)    [ -n "$desc_pane" ] && tmux kill-pane -t "$desc_pane" 2>/dev/null && echo "Killed fork: $desc_name" ;;
+    esac
   done
   all_ids=$(collect_descendants "$session_id" | tail -n +2 | jq -Rs '[split("\n")[] | select(. != "")]')
   jq --argjson ids "$all_ids" 'reduce $ids[] as $id (.; del(.sessions[$id]))' \
     ~/.claude/forks.json > /tmp/forks.tmp && mv /tmp/forks.tmp ~/.claude/forks.json
 fi
+
+current_session=$(tmux display-message -p '#S')
+current_window=$(tmux display-message -p '#W')
+current_pane=$(tmux display-message -p '#{pane_id}')
 
 jq --arg id "$session_id" --arg parent "$parent_id" \
   'del(.sessions[$id]) |
@@ -62,5 +77,17 @@ jq --arg id "$session_id" --arg parent "$parent_id" \
    else . end' \
   ~/.claude/forks.json > /tmp/forks.tmp && mv /tmp/forks.tmp ~/.claude/forks.json
 
-tmux switch-client -t "$parent_name"
-tmux kill-session -t "$current_session"
+case "$fork_mode" in
+  session)
+    tmux switch-client -t "$parent_name"
+    tmux kill-session -t "$current_session"
+    ;;
+  window)
+    tmux select-window -t ":$parent_name"
+    tmux kill-window -t ":$current_window"
+    ;;
+  pane)
+    [ -n "$parent_pane" ] && tmux select-pane -t "$parent_pane"
+    tmux kill-pane -t "$current_pane"
+    ;;
+esac

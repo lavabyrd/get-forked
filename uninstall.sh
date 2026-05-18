@@ -9,6 +9,7 @@ rm -f "$CLAUDE_DIR/scripts/"fork-{this,that,off,queue,doctor}.sh
 rm -f "$CLAUDE_DIR/commands/"fork-{this,that,off,queue}.md
 rm -f "$CLAUDE_DIR/commands/forking-hell.md"
 rm -rf "$CLAUDE_DIR/skills/get-forked"
+rm -f "$CLAUDE_DIR/get-forked.conf"
 
-echo "Removed scripts, commands, and skill."
+echo "Removed scripts, commands, skill, and config."
 echo "State file $CLAUDE_DIR/forks.json was NOT removed (delete manually if you want a clean slate)."

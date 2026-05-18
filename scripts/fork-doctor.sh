@@ -45,6 +45,19 @@ for script in fork-this fork-that fork-off fork-queue; do
 done
 
 echo ""
+echo "Config"
+conf="$HOME/.claude/get-forked.conf"
+if [ ! -f "$conf" ]; then
+  check warn "~/.claude/get-forked.conf not found (defaults to session mode; re-run install.sh to configure)"
+else
+  mode=$(grep '^FORK_MODE=' "$conf" 2>/dev/null | cut -d= -f2 || true)
+  case "$mode" in
+    session|window|pane) check pass "FORK_MODE=$mode" ;;
+    *) check fail "FORK_MODE='$mode' is invalid (must be session, window, or pane)" ;;
+  esac
+fi
+
+echo ""
 echo "State file"
 state="$HOME/.claude/forks.json"
 if [ ! -f "$state" ]; then
@@ -58,18 +71,29 @@ else
     session_count=$(jq '.sessions | length' "$state")
     check pass "$session_count session(s) recorded"
 
-    # Check for orphaned state entries (in state but tmux session gone)
     orphans=0
-    while IFS= read -r name; do
+    while IFS= read -r entry; do
+      [ -z "$entry" ] && continue
+      name=$(echo "$entry" | cut -f1)
+      mode=$(echo "$entry" | cut -f2)
       [ -z "$name" ] && continue
-      if ! tmux has-session -t "$name" 2>/dev/null; then
-        check warn "orphaned: '$name' in state but no tmux session"
-        orphans=$((orphans + 1))
-      fi
-    done < <(jq -r '.sessions[].name' "$state" 2>/dev/null)
+      case "$mode" in
+        session)
+          if ! tmux has-session -t "$name" 2>/dev/null; then
+            check warn "orphaned: '$name' [session] in state but no tmux session"
+            orphans=$((orphans + 1))
+          fi
+          ;;
+        window)
+          if ! tmux list-windows -F '#W' 2>/dev/null | grep -qx "$name"; then
+            check warn "orphaned: '$name' [window] in state but no tmux window"
+            orphans=$((orphans + 1))
+          fi
+          ;;
+      esac
+    done < <(jq -r '.sessions[] | [.name, (.mode // "session")] | @tsv' "$state" 2>/dev/null)
     [ "$orphans" -eq 0 ] && check pass "no orphaned state entries"
 
-    # Check for duplicate names
     dupes=$(jq -r '[.sessions[].name] | group_by(.) | map(select(length > 1)) | .[] | .[0]' "$state" 2>/dev/null)
     if [ -n "$dupes" ]; then
       while IFS= read -r name; do

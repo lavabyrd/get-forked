@@ -12,8 +12,9 @@ jq -r --arg current "$current_id" '
   . as $doc |
   def indent(n): " " * n;
   def marker(id): if id == $current then " ◀ current" else "" end;
+  def mode_tag(id): "[" + ($doc.sessions[id].mode // "?") + "]";
   def render(id; depth):
-    indent(depth * 2) + ($doc.sessions[id].name // id) + " (" + id + ")" + marker(id),
+    indent(depth * 2) + ($doc.sessions[id].name // id) + " " + mode_tag(id) + " (" + id + ")" + marker(id),
     ($doc.sessions[id].children[] as $child | render($child; depth + 1));
   [$doc.sessions | to_entries[]
     | select(.value.parent == null or (.value.parent as $p | $doc.sessions[$p] == null))
